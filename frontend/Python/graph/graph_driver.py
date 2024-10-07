@@ -164,17 +164,6 @@ class GraphDriver:
             for op in subgraph_body:
                 subgraph.node_table[op.name] = op
             #subgraphs[subgraph_name] = subgraph
-
-        # print("----------------------------------------")
-        # for op in self._graph.maingroup:
-        #     #if isinstance(op,FusedOp):
-        #         print("input:")
-        #         print(op._parents)
-        #         print("output:")
-        #         print(op._children)
-        #         print("op:")
-        #         print(op)
-        # print("----------------------------------------")
         
         #deal with the maingraph
         all_ops=[]

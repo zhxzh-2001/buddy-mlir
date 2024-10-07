@@ -1150,7 +1150,7 @@ def matmul_op(
     return op
 
 def transpose_matmul_fused_op(
-    node: transpose_Matmul_fusedOp, 
+    #node: transpose_Matmul_fusedOp, 
     symbol_table:Dict[Tuple[str, int], ir.Operation]
     ):
     input1 = symbol_table.get((str(node.args[0]),0))

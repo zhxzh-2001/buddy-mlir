@@ -519,10 +519,8 @@ class GraphImporter:
                         ]
                         self._symbol_table[("output", 0)] = returns
                     elif isinstance(node, PlaceholderOp):
-                        print("here is placeholder {0}".format(node.name))
                         self._import_placeholder(node, args_list)
                     elif isinstance(node, GetItemOp):
-                        print("here is getitem {0}".format(node.name))
                         self._symbol_table[
                             (str(node.name), 0)
                         ] = self._symbol_table[
