@@ -46,9 +46,8 @@ class OpType(Enum):
 
     Note: The underlying values are integers for these operation types.
     """
-
-    BroadcastType = 0
-    ElementwiseType = 1
+    ElementwiseType = 0
+    BroadcastType = 1
     ReshapeType = 2
     SliceLikeType = 3
     ReduceType = 4
@@ -86,6 +85,7 @@ class Op:
         self._op_type: OpType = None
         self._children: List[str] = []
         self._parents: List[str] = []
+        self._is_fused: bool = False
 
     def add_argument(self, arg):
         """
@@ -140,6 +140,14 @@ class Op:
     def tensor_meta(self, new_tensor_meta):
         self._tensor_meta = new_tensor_meta
 
+class FusedOp(Op):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fused_ops = []
+        #op : args parent children
+        self.outputs_map : dict[str,] ={}
+        #TODO
+        
 
 class PlaceholderOp(Op):
     def __init__(self) -> None:
@@ -152,10 +160,6 @@ class MatmulOp(Op):
         super().__init__()
         self._op_type = OpType.ReduceType
 
-class transpose_Matmul_fusedOp(Op):
-    def __init__(self) -> None:
-        super().__init__()
-        self._op_type = OpType.ReduceType
 
 class GetItemOp(Op):
     def __init__(self) -> None:

@@ -1,3 +1,11 @@
+import os
+import torch
+import torch._dynamo as dynamo
+from transformers import LlamaForCausalLM, LlamaTokenizer
+from torch._inductor.decomposition import decompositions as inductor_decomp
+import numpy
+
+from buddy.compiler.frontend import DynamoCompiler
 # ===- import-llama2.py --------------------------------------------------------
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,15 +25,6 @@
 # This is the test of llama2 model.
 #
 # ===---------------------------------------------------------------------------
-
-import os
-import torch
-import torch._dynamo as dynamo
-from transformers import LlamaForCausalLM, LlamaTokenizer
-from torch._inductor.decomposition import decompositions as inductor_decomp
-import numpy
-
-from buddy.compiler.frontend import DynamoCompiler
 from buddy.compiler.ops import tosa
 from buddy.compiler.graph import GraphDriver
 from buddy.compiler.graph.transform import simply_fuse
@@ -59,10 +58,11 @@ params = dynamo_compiler.imported_params[graph]
 pattern_list = [simply_fuse]
 graphs[0].fuse_ops(pattern_list)
 driver = GraphDriver(graphs[0])
-driver.subgraphs[0].lower_to_top_level_ir()
+#driver.subgraphs[0].lower_to_top_level_ir()
+driver.maingraph.lower_to_top_level_ir()
 path_prefix = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(path_prefix, "subgraph0.mlir"), "w") as module_file:
-    print(driver.subgraphs[0]._imported_module, file=module_file)
+    print(driver.maingraph._imported_module, file=module_file)
 with open(os.path.join(path_prefix, "forward.mlir"), "w") as module_file:
     print(driver.construct_main_graph(True), file=module_file)
 all_param = numpy.concatenate(

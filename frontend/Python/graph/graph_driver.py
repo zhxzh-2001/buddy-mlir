@@ -23,7 +23,7 @@
 from mlir import ir
 
 from .graph import Graph, GraphImporter, TensorMeta
-from .operation import FuncOp, CallOp, PlaceholderOp, OutputOp, GetItemOp
+from .operation import FuncOp, CallOp, PlaceholderOp, OutputOp, GetItemOp,FusedOp
 
 
 class GraphDriver:
@@ -51,6 +51,7 @@ class GraphDriver:
         Returns:
         - None
         """
+        self.maingraph : Graph = None
         self._graph = graph
         (
             self._subgraphs,
@@ -84,30 +85,45 @@ class GraphDriver:
                     if (
                         self._graph.node_table[parent]
                         not in self._graph.op_groups[subgraph_name]
+                        and 
+                        parent not in subgraphs_inputs[subgraph_name]
                     ):
                         subgraphs_inputs[subgraph_name].append(parent)
+            self._graph.node_table[subgraph_name]._parents = subgraphs_inputs[subgraph_name]
+            
         subgraphs_outputs = {}
-        output_node = []
-
+        
+        #output_node = []
         # Identify output nodes of the entire graph
-        for node in self._graph.body:
-            if isinstance(node, OutputOp):
-                for arg in node.args:
-                    output_node.append(arg)
+        # for node in self._graph.body:
+        #     if isinstance(node, OutputOp):
+        #         for arg in node.args:
+        #             print(arg)
+        #             output_node.append(arg)
+        
+        # Identify outputs for each subgraph
+        # for subgraph_name in self._graph.op_groups.keys():
+        #     subgraphs_outputs[subgraph_name] = []
+        #     for op in self._graph.op_groups[subgraph_name]:
+        #         for key in subgraphs_inputs.keys():
+        #             if op.name in subgraphs_inputs[key]:
+        #                 print("in subgraphs_inputs[key]")
+        #                 subgraphs_outputs[subgraph_name].append(op.name)
+        #         if (op.name in output_node) and (
+        #             op.name not in subgraphs_outputs[subgraph_name]
+        #         ):
+        #             subgraphs_outputs[subgraph_name].append(op.name)
         
         # Identify outputs for each subgraph
         for subgraph_name in self._graph.op_groups.keys():
             subgraphs_outputs[subgraph_name] = []
             for op in self._graph.op_groups[subgraph_name]:
-                for key in subgraphs_inputs.keys():
-                    if op.name in subgraphs_inputs[key]:
+                for child in op._children:
+                    if (self._graph.node_table[child] not in self._graph.op_groups[subgraph_name]):
                         subgraphs_outputs[subgraph_name].append(op.name)
-                if (op.name in output_node) and (
-                    op.name not in subgraphs_outputs[subgraph_name]
-                ):
-                    subgraphs_outputs[subgraph_name].append(op.name)
-        subgraphs = {}
+                        self._graph.node_table[subgraph_name]._children.append(child)
 
+        subgraphs = {}
         # Construct each subgraph
         for subgraph_name in self._graph.op_groups.keys():
             subgraph_input = []
@@ -147,10 +163,95 @@ class GraphDriver:
             subgraph.body = subgraph_body
             for op in subgraph_body:
                 subgraph.node_table[op.name] = op
-            subgraphs[subgraph_name] = subgraph
+            #subgraphs[subgraph_name] = subgraph
 
+        # print("----------------------------------------")
+        # for op in self._graph.maingroup:
+        #     #if isinstance(op,FusedOp):
+        #         print("input:")
+        #         print(op._parents)
+        #         print("output:")
+        #         print(op._children)
+        #         print("op:")
+        #         print(op)
+        # print("----------------------------------------")
+        
+        #deal with the maingraph
+        all_ops=[]
+        for op in self._graph.maingroup:
+            if isinstance(op,FusedOp):
+                all_ops.extend(op.fused_ops)
+            else:
+                all_ops.append(op)
+
+        maingraph_inputs=[] 
+        # Identify inputs
+        for op in self._graph.maingroup:
+            for parent in op._parents:
+                if (
+                    self._graph.node_table[parent]
+                    not in all_ops
+                    and 
+                    parent not in maingraph_inputs
+                ):
+                    maingraph_inputs.append(parent)
+        
+        maingraph_outputs=[]
+        #Identify outpust
+        # Identify output nodes of the entire graph
+        output_node = []
+        for node in self._graph.body:
+            if isinstance(node, OutputOp):
+                for arg in node.args:
+                    output_node.append(arg)
+        for op in self._graph.maingroup:
+            if (op.name in output_node) and (
+                op.name not in maingraph_outputs
+            ):
+                maingraph_outputs.append(op.name)
+                
+        miangraph_input=[]
+        maingraph_body=[]    
+        # Construct input placeholder nodes
+        for inp in maingraph_inputs:
+            node = self._graph.node_table[inp]
+            node_shape = node.tensor_meta["shape"]
+            node_dtype = node.tensor_meta["dtype"]
+            input_tensor_meta = TensorMeta(node_shape, node_dtype)
+            miangraph_input.append(input_tensor_meta)
+            placeholder_node = PlaceholderOp()
+            placeholder_node.name = inp
+            placeholder_node.tensor_meta = input_tensor_meta
+            for op in self._graph.maingroup:
+                if inp in node._parents:
+                    placeholder_node.add_children(op.name)
+            maingraph_body.append(placeholder_node)
+            
+        # Add operations to subgraph body
+        for op in self._graph.maingroup:
+            maingraph_body.append(op)
+            
+        # Construct output node
+        output_node = OutputOp()
+        output_node.name = "output"
+        for output in maingraph_outputs:
+            output_node.add_argument(output)
+            output_node.add_parent(output)
+        maingraph_body.append(output_node)
+        
+        # Create subgraph and add it to the dictionary
+        self.maingraph = Graph(
+            miangraph_input, [], self._graph._ops_registry, "mainfunc"
+        )
+        self.maingraph.body = maingraph_body
+        for op in maingraph_body:
+            self.maingraph.node_table[op.name] = op
+        subgraphs["maingraph"] = self.maingraph
+        subgraphs_inputs["maingraph"] = maingraph_inputs
+        subgraphs_outputs["maingraph"] = maingraph_outputs
+        
         return subgraphs, subgraphs_inputs, subgraphs_outputs
-
+          
     def construct_main_graph(self, do_param_pack=False):
         """
         Constructs the main computational graph by incorporating subgraphs' call
@@ -202,9 +303,11 @@ class GraphDriver:
             call_node.name = "call0"
             call_node.call_func_name = list(self._subgraphs.keys())[0]
             call_node.tensor_meta = {"shape": [], "dtype": []}
-            for inp in list(self._subgraphs_inputs.values())[0]:
+            #for inp in list(self._subgraphs_inputs.values())[0]:
+            for inp in self._subgraphs_inputs["maingraph"]:
                 call_node.add_argument(inp)
-            for output in list(self._subgraphs_outputs.values())[0]:
+            #for output in list(self._subgraphs_outputs.values())[0]:
+            for output in self._subgraphs_outputs["maingraph"]:
                 call_node.tensor_meta["shape"].append(
                     self._graph.node_table[output].tensor_meta["shape"]
                 )
@@ -215,7 +318,8 @@ class GraphDriver:
 
             # Adding GetItemOps to retrieve individual output tensors
             output_node = OutputOp()
-            for i, output in enumerate(list(self._subgraphs_outputs.values())[0]):
+            #for i, output in enumerate(list(self._subgraphs_outputs.values())[0]):
+            for i, output in enumerate(self._subgraphs_outputs["maingraph"]):
                 getitem_node = GetItemOp()
                 getitem_node.add_argument(call_node.name)
                 getitem_node.add_argument(i)
@@ -238,3 +342,4 @@ class GraphDriver:
                     do_param_pack,
                 )
                 return main_importer.import_main_graph()
+            
