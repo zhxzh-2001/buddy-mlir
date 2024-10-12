@@ -20,10 +20,12 @@
 #
 # ===---------------------------------------------------------------------------
 
+from enum import Enum
 from mlir import ir
 
 from .graph import Graph, GraphImporter, TensorMeta
 from .operation import FuncOp, CallOp, PlaceholderOp, OutputOp, GetItemOp,FusedOp
+
 
 
 class GraphDriver:
@@ -40,7 +42,12 @@ class GraphDriver:
     - _subgraphs_outputs (dict): A dictionary mapping subgraph names to their
     output op's result.
     """
-    def __init__(self, graph: Graph) -> None:
+    
+    class graph_stratgy(Enum):
+        no_split=0
+        split=1
+    
+    def __init__(self, graph: Graph,mode:graph_stratgy=graph_stratgy.no_split) -> None:
         """
         Initialize the GraphDriver object with a given computational graph.
 
@@ -53,11 +60,18 @@ class GraphDriver:
         """
         self.maingraph : Graph = None
         self._graph = graph
-        (
-            self._subgraphs,
-            self._subgraphs_inputs,
-            self._subgraphs_outputs,
-        ) = self.build_subgraph_by_group()
+        if (mode==self.graph_stratgy.no_split):
+            (
+                self._subgraphs,
+                self._subgraphs_inputs,
+                self._subgraphs_outputs,
+            ) = self.build_with_no_subgraph()
+        elif (mode==self.graph_stratgy.split):
+            (
+                self._subgraphs,
+                self._subgraphs_inputs,
+                self._subgraphs_outputs,
+            ) = self.build_subgraph_by_group()
 
     @property
     def subgraphs(self):
@@ -74,7 +88,6 @@ class GraphDriver:
         - tuple: A tuple containing dictionaries of subgraphs, subgraph inputs,
         and subgraph outputs.
         """
-
         subgraphs_inputs = {}
 
         # Identify inputs for each subgraph
@@ -85,45 +98,30 @@ class GraphDriver:
                     if (
                         self._graph.node_table[parent]
                         not in self._graph.op_groups[subgraph_name]
-                        and 
-                        parent not in subgraphs_inputs[subgraph_name]
                     ):
                         subgraphs_inputs[subgraph_name].append(parent)
-            self._graph.node_table[subgraph_name]._parents = subgraphs_inputs[subgraph_name]
-            
         subgraphs_outputs = {}
-        
-        #output_node = []
+        output_node = []
+
         # Identify output nodes of the entire graph
-        # for node in self._graph.body:
-        #     if isinstance(node, OutputOp):
-        #         for arg in node.args:
-        #             print(arg)
-        #             output_node.append(arg)
-        
-        # Identify outputs for each subgraph
-        # for subgraph_name in self._graph.op_groups.keys():
-        #     subgraphs_outputs[subgraph_name] = []
-        #     for op in self._graph.op_groups[subgraph_name]:
-        #         for key in subgraphs_inputs.keys():
-        #             if op.name in subgraphs_inputs[key]:
-        #                 print("in subgraphs_inputs[key]")
-        #                 subgraphs_outputs[subgraph_name].append(op.name)
-        #         if (op.name in output_node) and (
-        #             op.name not in subgraphs_outputs[subgraph_name]
-        #         ):
-        #             subgraphs_outputs[subgraph_name].append(op.name)
+        for node in self._graph.body:
+            if isinstance(node, OutputOp):
+                for arg in node.args:
+                    output_node.append(arg)
         
         # Identify outputs for each subgraph
         for subgraph_name in self._graph.op_groups.keys():
             subgraphs_outputs[subgraph_name] = []
             for op in self._graph.op_groups[subgraph_name]:
-                for child in op._children:
-                    if (self._graph.node_table[child] not in self._graph.op_groups[subgraph_name]):
+                for key in subgraphs_inputs.keys():
+                    if op.name in subgraphs_inputs[key]:
                         subgraphs_outputs[subgraph_name].append(op.name)
-                        self._graph.node_table[subgraph_name]._children.append(child)
-
+                if (op.name in output_node) and (
+                    op.name not in subgraphs_outputs[subgraph_name]
+                ):
+                    subgraphs_outputs[subgraph_name].append(op.name)
         subgraphs = {}
+
         # Construct each subgraph
         for subgraph_name in self._graph.op_groups.keys():
             subgraph_input = []
@@ -158,12 +156,19 @@ class GraphDriver:
 
             # Create subgraph and add it to the dictionary
             subgraph = Graph(
-                subgraph_input, [], self._graph._ops_registry, subgraph_name
+                subgraph_input, [], self._graph._ops_registry, subgraph_name, verbose=self._graph._verbose
             )
             subgraph.body = subgraph_body
             for op in subgraph_body:
                 subgraph.node_table[op.name] = op
-            #subgraphs[subgraph_name] = subgraph
+            subgraphs[subgraph_name] = subgraph
+
+        return subgraphs, subgraphs_inputs, subgraphs_outputs
+    
+    def build_with_no_subgraph(self):
+        subgraphs = {}
+        subgraphs_inputs = {}
+        subgraphs_outputs = {}
         
         #deal with the maingraph
         all_ops=[]
@@ -187,18 +192,11 @@ class GraphDriver:
         
         maingraph_outputs=[]
         #Identify outpust
-        # Identify output nodes of the entire graph
-        output_node = []
         for node in self._graph.body:
             if isinstance(node, OutputOp):
                 for arg in node.args:
-                    output_node.append(arg)
-        for op in self._graph.maingroup:
-            if (op.name in output_node) and (
-                op.name not in maingraph_outputs
-            ):
-                maingraph_outputs.append(op.name)
-                
+                    maingraph_outputs.append(arg)
+        
         miangraph_input=[]
         maingraph_body=[]    
         # Construct input placeholder nodes
@@ -238,11 +236,11 @@ class GraphDriver:
         subgraphs["maingraph"] = self.maingraph
         subgraphs_inputs["maingraph"] = maingraph_inputs
         subgraphs_outputs["maingraph"] = maingraph_outputs
-        
-        return subgraphs, subgraphs_inputs, subgraphs_outputs
+        return subgraphs,subgraphs_inputs,subgraphs_inputs
           
     def construct_main_graph(self, do_param_pack=False):
         """
+        
         Constructs the main computational graph by incorporating subgraphs' call
         and placeholder operations.
 
@@ -257,6 +255,7 @@ class GraphDriver:
         implementation.
 
         """
+        
         main_graph = Graph(
             self._graph._inputs,
             self._graph._fake_params,
@@ -331,4 +330,3 @@ class GraphDriver:
                     do_param_pack,
                 )
                 return main_importer.import_main_graph()
-            

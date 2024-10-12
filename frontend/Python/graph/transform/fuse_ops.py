@@ -405,56 +405,62 @@ class GraphPartioner:
                             self.CommitFuse(
                                 graph_node, dom_node.parent_gnode, tree
                             )
-            # for node in tree.groups:
-            #     if node.master_ref is not None:
-            #         logger.info(
-            #             "[groups] {0} {1} {2}".format(
-            #                 node.name, node.num_nodes, node.master_ref.name
-            #             )
-            #         )
-            #     else:
-            #         logger.info(
-            #             "[groups with no master] {0} {1}".format(
-            #                 node.name, node.num_nodes
-            #             )
-            #         )
-            self._graph.op_groups = {}
-            cnt = 0
-            for node_name in tree.cached_op_groups.keys():
-                if (len(tree.cached_op_groups[node_name]) == 1):
-                    if isinstance(tree.cached_op_groups[node_name][0],PlaceholderOp):
-                        continue
-                    self._graph.maingroup.append(tree.cached_op_groups[node_name][0])
-                else:
-                    fops = FusedOp();
-                    fops.name = "fused_"+str(cnt)
-                    fops.fused_ops = tree.cached_op_groups[node_name]
-                    self._graph.maingroup.append(fops)
-                    self._graph.node_table[fops.name] = fops
-                    self._graph.op_groups[fops.name] = fops.fused_ops
-                    cnt += 1
-                    # if node.master_ref.name not in self._graph.op_groups:
-                    #     self._graph.op_groups[node.master_ref.name] = []
-                    #     self._graph.group_map_device = {
-                    #         node.master_ref.name: DeviceType.UNKNOW
-                    #     }
-                    # self._graph.op_groups[node.master_ref.name].append(
-                    #     self._graph.node_table[node.name]
-                    # )
-            print("totol fuse:{0}".format(cnt))
-            logger.info("------------maingroup pattern----------------")
-            for i,n in enumerate( self._graph.maingroup ):
-                logger.info("maingroup.op_groups[{0}]:{1}".format(i,n.name))
-                logger.info("node message:{0}".format(n))
-                if isinstance(n, FusedOp):
-                    logger.info("fused_ops:{0}".format(n.fused_ops))
-                    for cnt,j in enumerate(n.fused_ops):
-                        logger.info("cnt op:")
-                        logger.info("parents:{0}".format(j._parents))
-                        logger.info("childs{0}:".format(j._children))
-                logger.info("-----------------------------------------")
             
-
+    def FinishFuse(self,tree):
+        self._graph.op_groups = {}
+        cnt = 0
+        for node_name in tree.cached_op_groups.keys():
+            if (len(tree.cached_op_groups[node_name]) == 1):
+                if isinstance(tree.cached_op_groups[node_name][0],PlaceholderOp):
+                    continue
+                self._graph.maingroup.append(tree.cached_op_groups[node_name][0])
+            else:
+                fops = FusedOp();
+                fops.name = "fused_"+str(cnt)
+                fops.fused_ops = tree.cached_op_groups[node_name]
+                for i in fops.fused_ops:
+                    i._is_fused = True
+                    i.fuse_ref = fops
+                self._graph.maingroup.append(fops)
+                self._graph.node_table[fops.name] = fops
+                self._graph.op_groups[fops.name] = fops.fused_ops
+            cnt += 1
+        #construct each fusedop:
+        # Identify inputs for each op_group
+        for name in self._graph.op_groups.keys():
+            inputs = []
+            for op in self._graph.op_groups[name]:
+                for parent in op._parents:
+                    if (
+                        self._graph.node_table[parent]
+                        not in self._graph.op_groups[name]
+                        and 
+                        parent not in inputs
+                    ):
+                        inputs.append(parent)
+            self._graph.node_table[name]._parents = inputs  
+        
+        for name in self._graph.op_groups.keys():
+            outputs = []
+            for op in self._graph.op_groups[name]:
+                for child in op._children:
+                    if (self._graph.node_table[child] not in self._graph.op_groups[name]):
+                        outputs.append(op.name)
+                        self._graph.node_table[name]._children.append(child)
+                   
+        print("totol fuse:{0}".format(cnt))
+        logger.info("------------maingroup pattern----------------")
+        for i,n in enumerate( self._graph.maingroup ):
+            logger.info("maingroup.op_groups[{0}]:{1}".format(i,n.name))
+            logger.info("node message:{0}".format(n))
+            if isinstance(n, FusedOp):
+                logger.info("fused_ops:{0}".format(n.fused_ops))
+                for cnt,j in enumerate(n.fused_ops):
+                    logger.info("cnt op:")
+                    logger.info("parents:{0}".format(j._parents))
+                    logger.info("childs{0}:".format(j._children))
+            logger.info("-----------------------------------------")
+        pass
 
 def my_fuse_ops_test(graph: Graph):
     graph._ops_registry["OutputOp"] = OutputOp
@@ -472,7 +478,7 @@ def my_fuse_ops_test(graph: Graph):
     
     fuse_op_object = GraphPartioner(graph)
     fuse_op_object.RunFuse(topo_graph, post_dom_tree)
-    
+    fuse_op_object.FinishFuse(post_dom_tree)
 
 def simply_fuse(graph: Graph):
     """

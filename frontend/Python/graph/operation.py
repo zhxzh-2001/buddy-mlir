@@ -86,7 +86,7 @@ class Op:
         self._children: List[str] = []
         self._parents: List[str] = []
         self._is_fused: bool = False
-
+        self.fuse_ref:FusedOp = None
     def add_argument(self, arg):
         """
         Add an input argument to the operation node.
